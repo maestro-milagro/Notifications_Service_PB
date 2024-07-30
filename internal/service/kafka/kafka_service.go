@@ -14,15 +14,21 @@ type WhoSubber interface {
 	WhoSubbed(ctx context.Context, email string) ([]int, error)
 }
 
+type PostSaver interface {
+	SavePost(ctx context.Context, user models.Post) (int64, error)
+}
+
 type KafkaService struct {
 	log       *slog.Logger
 	whoSubber WhoSubber
+	postSaver PostSaver
 }
 
-func New(log *slog.Logger, whoSubber WhoSubber) *KafkaService {
+func New(log *slog.Logger, whoSubber WhoSubber, postSaver PostSaver) *KafkaService {
 	return &KafkaService{
 		log:       log,
 		whoSubber: whoSubber,
+		postSaver: postSaver,
 	}
 }
 
@@ -41,11 +47,17 @@ func (kf *KafkaService) ConsumeClaim(session sarama.ConsumerGroupSession, claim 
 		if err != nil {
 			fmt.Printf("error while umarshaling: %s\n", err)
 		}
-		subs, err := kf.whoSubber.WhoSubbed(context.Background(), msg.Email)
+
+		// TODO: notify subs
+		_, err = kf.whoSubber.WhoSubbed(context.Background(), msg.Email)
 		if err != nil {
 			kf.log.Error("error while whosubbed check: ", sl.Err(err))
 		}
-		fmt.Printf("Msg subs: %v\n", subs)
+
+		id, err := kf.postSaver.SavePost(context.Background(), msg)
+
+		fmt.Printf("Post saved: %v\n", id)
+
 		session.MarkMessage(message, "")
 	}
 
@@ -64,8 +76,6 @@ func (kf *KafkaService) subscribe(ctx context.Context, topic string, consumerGro
 
 	return nil
 }
-
-var brokers = []string{"localhost:9095"}
 
 func (kf *KafkaService) StartConsuming(ctx context.Context, topic string, brokers []string, groupID string) error {
 	config := sarama.NewConfig()

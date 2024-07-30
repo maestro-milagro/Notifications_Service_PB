@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Env                  string `yaml:"env" env-default:"local"`
 	KafkaBootstrapServer string `yaml:"kafka_bootstrap_server" env-default:"localhost:9095"`
+	Secret               string `yaml:"secret"`
 	DB                   `yaml:"db"`
 	HTTPServer           `yaml:"http_server"`
 }

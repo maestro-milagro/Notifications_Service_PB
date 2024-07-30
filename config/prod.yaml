@@ -1,5 +1,6 @@
 env: "prod"
 kafka_bootstrap_server: "localhost:9095"
+secret: "my-32-character-ultra-secure-and-ultra-long-secret"
 http_server:
   address: "0.0.0.0:8084"
   timeout: 4s

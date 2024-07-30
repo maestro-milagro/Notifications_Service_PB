@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"github.com/IBM/sarama"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/maestro-milagro/Notifications_Service_PB/internal/config"
+	"github.com/maestro-milagro/Notifications_Service_PB/internal/http-server/handlers/get_all"
 	"github.com/maestro-milagro/Notifications_Service_PB/internal/lib/sl"
 	"github.com/maestro-milagro/Notifications_Service_PB/internal/service"
 	kafka_service "github.com/maestro-milagro/Notifications_Service_PB/internal/service/kafka"
@@ -24,78 +24,7 @@ const (
 	envProd  = "prod"
 )
 
-type ProductInfo struct {
-	SKU   int64
-	Price float64
-	Cnt   int64
-}
-
-type OrderInfo struct {
-	UserID    int64
-	CreatedAt time.Time
-	Products  []ProductInfo
-}
-
-type Consumer struct {
-}
-
-func (consumer *Consumer) Setup(sarama.ConsumerGroupSession) error {
-	return nil
-}
-
-func (consumer *Consumer) Cleanup(sarama.ConsumerGroupSession) error {
-	return nil
-}
-
-func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for message := range claim.Messages() {
-		var msg OrderInfo
-		err := json.Unmarshal(message.Value, &msg)
-		if err != nil {
-			fmt.Printf("error while umarshaling: %s\n", err)
-		}
-		fmt.Printf("Msg: %d\n", msg.UserID)
-
-		session.MarkMessage(message, "")
-	}
-
-	return nil
-}
-
-func subscribe(ctx context.Context, topic string, consumerGroup sarama.ConsumerGroup) error {
-	consumer := Consumer{}
-
-	go func() {
-		if err := consumerGroup.Consume(ctx, []string{topic}, &consumer); err != nil {
-			fmt.Printf("error while consuming: %s\n", err)
-		}
-		if ctx.Err() != nil {
-			return
-		}
-	}()
-
-	return nil
-}
-
-func StartConsuming(ctx context.Context, topic string, brokers []string, groupID string) error {
-	config := sarama.NewConfig()
-
-	config.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategyRoundRobin
-	config.Consumer.Offsets.Initial = sarama.OffsetOldest
-
-	consumerGroup, err := sarama.NewConsumerGroup(brokers, groupID, config)
-	if err != nil {
-		return err
-	}
-
-	return subscribe(ctx, topic, consumerGroup)
-}
-
 func main() {
-	//for {
-	//
-	//}
-
 	cfg := config.MustLoad()
 
 	log := setupLogger(cfg.Env)
@@ -121,9 +50,20 @@ func main() {
 		log.Error("failed to init storage", sl.Err(err))
 		os.Exit(1)
 	}
-	noteService := service.New(log, storage)
 
-	kafkaService := kafka_service.New(log, noteService)
+	router := chi.NewRouter()
+
+	router.Use(middleware.RequestID)
+	router.Use(middleware.Logger)
+	//	router.Use(mwLogger.New(log))
+	router.Use(middleware.Recoverer)
+	router.Use(middleware.URLFormat)
+
+	noteService := service.New(log, storage, storage, storage)
+
+	kafkaService := kafka_service.New(log, noteService, noteService)
+
+	router.Get("/", get_all.New(log, cfg.Secret, noteService))
 
 	log.Info("starting server", slog.String("address", cfg.Address))
 
@@ -132,6 +72,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         cfg.Address,
+		Handler:      router,
 		ReadTimeout:  cfg.HTTPServer.Timeout,
 		WriteTimeout: cfg.HTTPServer.Timeout,
 		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
@@ -146,13 +87,12 @@ func main() {
 	log.Info("server started")
 
 	ctx := context.Background()
-
-	//brokers := []string{"localhost:9095"}
-
+	//	go func() {
 	err = kafkaService.StartConsuming(ctx, "posts", []string{cfg.KafkaBootstrapServer}, "notifications")
 	if err != nil {
 		return
 	}
+	//	}()
 
 	<-done
 	log.Info("stopping server")
